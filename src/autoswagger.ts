@@ -8,14 +8,6 @@ import { isEmpty, isUndefined } from "lodash";
 import { existsSync } from "fs";
 import { scalarCustomCss } from "./scalarCustomCss";
 import { serializeV6Middleware, serializeV6Handler } from "./adonishelpers";
-import {
-  InterfaceParser,
-  ModelParser,
-  CommentParser,
-  RouteParser,
-  ValidatorParser,
-  EnumParser,
-} from "./parsers";
 
 import type { options, AdonisRoutes, v6Handler, AdonisRoute } from "./types";
 
@@ -23,6 +15,12 @@ import { mergeParams, formatOperationId } from "./helpers";
 import ExampleGenerator, { ExampleInterfaces } from "./example";
 // @ts-expect-error moduleResolution:nodenext issue 54523
 import { VineValidator } from "@vinejs/vine";
+import { CommentParser } from "./parsers/comment-parser";
+import { RouteParser } from "./parsers/route-parser";
+import { ModelParser } from "./parsers/model-parser";
+import { InterfaceParser } from "./parsers/interface-parser";
+import { EnumParser } from "./parsers/enum-parser";
+import { ValidatorParser } from "./parsers/validator-parser";
 
 export class AutoSwagger {
   private options: options;

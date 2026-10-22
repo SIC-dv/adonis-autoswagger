@@ -26,62 +26,129 @@ export class CommentParser {
         let requestBody;
         let parameters = {};
         let headers = {};
-        lines.forEach((line) => {
-            if (line.startsWith("@summary")) {
-                summary = line.replace("@summary ", "");
-            }
-            if (line.startsWith("@tag")) {
-                tag = line.replace("@tag ", "");
-            }
 
+        let readingDescription = false;
+
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
             if (line.startsWith("@description")) {
-                description = line.replace("@description ", "");
+                description = line.replace(/^@description\s*/, "");
+                readingDescription = true;
+                continue;
             }
 
-            if (line.startsWith("@operationId")) {
-                operationId = line.replace("@operationId ", "");
+            if (!line.startsWith("@")) {
+                if (readingDescription && line.trim()) {
+                    description += ` ${line.trim()}`;
+                }
+                continue;
             }
 
-            if (line.startsWith("@responseBody")) {
+            readingDescription = false;
+
+            if (line.startsWith("@summary")) {
+                summary = line.replace(/^@summary\s*/, "");
+            } else if (line.startsWith("@tag")) {
+                tag = line.replace(/^@tag\s*/, "");
+            } else if (line.startsWith("@operationId")) {
+                operationId = line.replace(/^@operationId\s*/, "");
+            } else if (line.startsWith("@responseBody")) {
+                let responseLine = line.replace(/^@responseBody\s*/, "");
+
+                const firstSeparator = responseLine.indexOf(" - ");
+                if (firstSeparator !== -1) {
+                    const status = responseLine.substring(0, firstSeparator);
+                    let remaining = responseLine.substring(firstSeparator + 3);
+
+                    if (!isJSONString(remaining)) {
+                        let candidate = remaining;
+                        let j = i + 1;
+
+                        while (j < lines.length && !lines[j].startsWith("@")) {
+                            candidate += "\n" + lines[j];
+
+                            if (isJSONString(candidate)) {
+                                remaining = candidate;
+                                i = j;
+                                break;
+                            }
+
+                            j++;
+                        }
+                    }
+
+                    responseLine = `${status} - ${remaining}`;
+                }
+
                 responses = {
                     ...responses,
-                    ...this.parseResponseBody(line),
+                    ...this.parseResponseBody(
+                        `@responseBody ${responseLine}`
+                    ),
                 };
-            }
-            if (line.startsWith("@responseHeader")) {
+            } else if (line.startsWith("@responseHeader")) {
                 const header = this.parseResponseHeader(line);
+
                 if (header === null) {
                     console.error("Error with line: " + line);
-                    return;
+                    continue;
                 }
-                headers[header["status"]] = {
-                    ...headers[header["status"]],
-                    ...header["header"],
+
+                headers[header.status] = {
+                    ...headers[header.status],
+                    ...header.header,
                 };
-            }
-            if (line.startsWith("@requestBody")) {
-                requestBody = this.parseBody(line, "requestBody");
-            }
-            if (line.startsWith("@requestFormDataBody")) {
+            } else if (line.startsWith("@requestBody")) {
+                let body = line.replace(/^@requestBody\s*/, "");
+
+                if (!isJSONString(body)) {
+                    let candidate = body;
+                    let j = i + 1;
+
+                    while (j < lines.length && !lines[j].startsWith("@")) {
+                        candidate += "\n" + lines[j];
+
+                        if (isJSONString(candidate)) {
+                            body = candidate;
+                            i = j;
+                            break;
+                        }
+
+                        j++;
+                    }
+                }
+
+                requestBody = this.parseBody(
+                    `@requestBody ${body}`,
+                    "requestBody"
+                );
+            } else if (line.startsWith("@requestFormDataBody")) {
                 const parsedBody = this.parseRequestFormDataBody(line);
+
                 if (parsedBody) {
                     requestBody = parsedBody;
                 }
+            } else if (line.startsWith("@param")) {
+                parameters = {
+                    ...parameters,
+                    ...this.parseParam(line),
+                };
             }
-            if (line.startsWith("@param")) {
-                parameters = { ...parameters, ...this.parseParam(line) };
-            }
-        });
+        }
 
         for (const [key, value] of Object.entries(responses)) {
-            if (typeof headers[key] !== undefined) {
+            if (headers[key] !== undefined) {
                 responses[key]["headers"] = headers[key];
             }
+
             if (!responses[key]["description"]) {
-                responses[key][
-                    "description"
-                ] = `Returns **${key}** (${HTTPStatusCode.getMessage(key)}) as **${Object.entries(responses[key]["content"])[0][0]
-                }**`;
+                const contentType = Object.keys(
+                    responses[key]["content"] || {}
+                )[0];
+
+                responses[key]["description"] =
+                    `Returns **${key}** (${HTTPStatusCode.getMessage(key)})` +
+                    (contentType ? ` as **${contentType}**` : "");
             }
         }
 
@@ -246,12 +313,38 @@ export class CommentParser {
     }
 
     private parseResponseBody(responseLine: string) {
-        let responses = {};
-        const line = responseLine.replace("@responseBody ", "");
-        let [status, res, desc] = line.split(" - ");
-        if (typeof status === "undefined") return;
-        responses[status] = this.parseBody(res, "responseBody");
-        responses[status]["description"] = desc;
+        const line = responseLine.replace(/^@responseBody\s*/, "");
+        const firstSeparator = line.indexOf(" - ");
+
+        if (firstSeparator === -1) {
+            return;
+        }
+
+        const status = line.substring(0, firstSeparator).trim();
+        const remaining = line.substring(firstSeparator + 3).trim();
+
+        let res = remaining;
+        let desc: string | undefined;
+
+        if (isJSONString(remaining)) {
+            res = remaining;
+        } else {
+            // Preserve the existing reference and description syntax.
+            const secondSeparator = remaining.indexOf(" - ");
+
+            if (secondSeparator !== -1) {
+                res = remaining.substring(0, secondSeparator).trim();
+                desc = remaining.substring(secondSeparator + 3).trim();
+            }
+        }
+
+        const responses = {
+            [status]: {
+                ...this.parseBody(res, "responseBody"),
+                ...(desc ? { description: desc } : {}),
+            },
+        };
+
         return responses;
     }
 
@@ -370,7 +463,27 @@ export class CommentParser {
         return { type: typeof json[0] };
     }
 
-    jsonToObj(json) {
+    jsonToObj(json: any) {
+        // Handle null values safely.
+        if (json === null) {
+            return { nullable: true };
+        }
+
+        // Handle arrays separately from regular objects.
+        if (Array.isArray(json)) {
+            return {
+                type: "array",
+                items: json.length > 0
+                    ? this.jsonToObj(json[0])
+                    : {},
+            };
+        }
+
+        // Handle primitive values safely.
+        if (typeof json !== "object") {
+            return { type: typeof json };
+        }
+
         const o = {
             type: "object",
             properties: Object.keys(json)
@@ -378,80 +491,98 @@ export class CommentParser {
                     const t = typeof json[key];
                     const v = json[key];
                     let value = v;
+
                     if (t === "object") {
-                        value = this.jsonToObj(json[key]);
+                        value = this.jsonToObj(v);
                     }
-                    if (t === "string" && v.includes("<") && v.includes(">")) {
+
+                    if (
+                        t === "string" &&
+                        v.includes("<") &&
+                        v.includes(">")
+                    ) {
                         value = this.exampleGenerator.parseRef(v);
+
                         if (v.includes("[]")) {
                             let ref = "";
-                            if (_.has(value, "content.application/json.schema.$ref")) {
-                                ref = value["content"]["application/json"]["schema"]["$ref"];
-                            }
-                            if (_.has(value, "content.application/json.schema.items.$ref")) {
+
+                            if (
+                                _.has(
+                                    value,
+                                    "content.application/json.schema.$ref"
+                                )
+                            ) {
                                 ref =
-                                    value["content"]["application/json"]["schema"]["items"][
-                                    "$ref"
-                                    ];
+                                    value["content"]["application/json"]
+                                    ["schema"]["$ref"];
                             }
+
+                            if (
+                                _.has(
+                                    value,
+                                    "content.application/json.schema.items.$ref"
+                                )
+                            ) {
+                                ref =
+                                    value["content"]["application/json"]
+                                    ["schema"]["items"]["$ref"];
+                            }
+
                             value = {
                                 type: "array",
-                                items: {
-                                    $ref: ref,
-                                },
+                                items: { $ref: ref },
                             };
                         } else {
                             value = {
-                                $ref: value["content"]["application/json"]["schema"]["$ref"],
+                                $ref:
+                                    value["content"]["application/json"]
+                                    ["schema"]["$ref"],
                             };
                         }
                     }
-                    return {
-                        [key]: value,
-                    };
+
+                    return { [key]: value };
                 })
                 .reduce((acc, curr) => ({ ...acc, ...curr }), {}),
         };
-        // console.dir(o, { depth: null });
-        // console.log(json);
+
         return o;
     }
 
     async getAnnotations(file: string, action: string) {
-        let annotations = {};
-        let newdata = "";
-        if (typeof file === "undefined") return;
+        if (!file) return;
+
+        let source: string;
 
         if (typeof this.parsedFiles[file] !== "undefined") {
-            newdata = this.parsedFiles[file];
+            source = this.parsedFiles[file];
         } else {
             try {
-                const readFile = util.promisify(fs.readFile);
-                const data = await readFile(file, "utf8");
-                for (const line of data.split("\n")) {
-                    const l = line.trim();
-                    if (!l.startsWith("@")) {
-                        newdata += l + "\n";
-                    }
-                }
-                this.parsedFiles[file] = newdata;
+                source = await fs.promises.readFile(file, "utf8");
+                this.parsedFiles[file] = source;
             } catch (e) {
-                console.error("\x1b[31m✗ File not found\x1b[0m", file)
+                console.error("\x1b[31m✗ File not found\x1b[0m", file);
+                return;
             }
         }
 
-        const comments = extract(newdata);
-        if (comments.length > 0) {
-            comments.forEach((comment) => {
-                if (comment.type !== "BlockComment") return;
-                let lines = comment.value.split("\n").filter((l) => l != "");
-                // fix for decorators
-                if (lines[0].trim() !== "@" + action) return;
-                lines = lines.filter((l) => l != "");
+        const annotations = {};
+        const comments = extract(source);
 
-                annotations[action] = this.parseAnnotations(lines);
-            });
+        for (const comment of comments) {
+            if (comment.type !== "BlockComment") continue;
+
+            const lines = comment.value
+                .split("\n")
+                .map((line) => line.replace(/^\s*\*\s?/, "").trim())
+                .filter((line) => line !== "");
+
+            if (lines[0] !== `@${action}`) continue;
+
+            annotations[action] = this.parseAnnotations(lines);
+            break;
         }
+
         return annotations;
     }
 }

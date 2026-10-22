@@ -435,10 +435,11 @@ export class AutoSwagger {
           }
           if (
             typeof responses[responseCodes[method]] !== "undefined" &&
-            typeof responses[responseCodes[method]]["description"] !==
-              "undefined"
+            typeof responses[responseCodes[method]]["description"] !== "undefined"
           ) {
-            description = responses[responseCodes[method]]["description"];
+            if (!description || description.trim() === "") {
+              description = responses[responseCodes[method]]["description"];
+            }
           }
         }
 

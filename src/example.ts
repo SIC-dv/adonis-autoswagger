@@ -6,28 +6,43 @@ export default class ExampleGenerator {
     this.schemas = schemas;
   }
 
-  jsonToRef(json) {
-    const jsonObjectIsArray = Array.isArray(json);
-    let out = {};
-    let outArr = [];
-    for (let [k, v] of Object.entries(json)) {
-      if (typeof v === "object") {
-        if (!Array.isArray(v)) {
-          v = this.jsonToRef(v);
-        }
+
+  jsonToRef(json: any): any {
+    // Preserve null as a valid JSON value.
+    if (json === null) {
+      return null;
+    }
+
+    // Handle primitive values, including the string "null".
+    if (typeof json !== "object") {
+      if (typeof json === "string") {
+        return this.parseRef(json, true);
       }
-      if (typeof v === "string") {
+      return json;
+    }
+
+    // Handle arrays recursively.
+    if (Array.isArray(json)) {
+      return json.map((value) => this.jsonToRef(value));
+    }
+
+    const out = {};
+
+    for (const [k, originalValue] of Object.entries(json)) {
+      let v = originalValue;
+
+      if (typeof v === "object" && v !== null) {
+        v = this.jsonToRef(v);
+      } else if (typeof v === "string") {
         v = this.parseRef(v, true);
       }
 
-      if (jsonObjectIsArray) {
-        outArr.push(v);
-      } else {
-        out[k] = v;
-      }
+      out[k] = v;
     }
-    return outArr.length > 0 ? outArr.flat() : out;
+
+    return out;
   }
+
 
   parseRef(line: string, exampleOnly = false) {
     let rawRef = line.substring(line.indexOf("<") + 1, line.lastIndexOf(">"));
@@ -85,7 +100,7 @@ export default class ExampleGenerator {
     let app = {};
     try {
       app = JSON.parse("{" + append + "}");
-    } catch {}
+    } catch { }
 
     const cleanedRef = rawRef.replace("[]", "");
 
